@@ -13,6 +13,9 @@ RUN mkdir -p /app
 COPY . /app
 WORKDIR /app
 
+# Simple unit test
+# RUN go test ./sum -v
+
 # Compile app
 RUN GOOS=linux go build -a -installsuffix cgo -o main main.go
 RUN chmod +x main

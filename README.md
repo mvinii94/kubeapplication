@@ -1,79 +1,29 @@
 # kubeapp
 
-### Prerequisites
+## Setup
 
-#### 1. Create an IAM Role "KubeAdm" with the following
+### Create IAM Role for CodeBuild have enough permissions to use kubectl
 
-##### Trust relantionship
+```bash
+cd ~/kubeapplication
 
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "Service": "cloudformation.amazonaws.com"
-            },
-            "Action": "sts:AssumeRole"
-        },
-        {
-            "Sid": "allowAdminUser",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "<YourIAMUserOrRoleArn>"
-            },
-            "Action": "sts:AssumeRole"
-        }
-    ]
-}
+AWS_ACCOUNT_ID="123456789012"
+
+TRUST="{ \"Version\": \"2012-10-17\", \"Statement\": [ { \"Effect\": \"Allow\", \"Principal\": { \"AWS\": \"arn:aws:iam::${AWS_ACCOUNT_ID}:root\" }, \"Action\": \"sts:AssumeRole\" } ] }"
+
+echo '{ "Version": "2012-10-17", "Statement": [ { "Effect": "Allow", "Action": "eks:Describe*", "Resource": "*" } ] }' > /tmp/iam-role-policy
+
+aws iam create-role --role-name EksWorkshopCodeBuildKubectlRole --assume-role-policy-document "${TRUST}" --output text --query 'Role.Arn'
+
+aws iam put-role-policy --role-name EksWorkshopCodeBuildKubectlRole --policy-name eks-describe --policy-document file:///tmp/iam-role-policy
 ```
 
-##### Policy
+### Add the above IAM Role to the aws-auth ConfigMap for the EKS cluster
 
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": "*",
-            "Resource": "*"
-        }
-    ]
-}
-```
+```bash
+ROLE="    - rolearn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/EksWorkshopCodeBuildKubectlRole\n      username: build\n      groups:\n        - system:masters"
 
-#### Create am IAM Role "EksWorkshopCodeBuildKubectlRole" with the following
+kubectl get -n kube-system configmap/aws-auth -o yaml | awk "/mapRoles: \|/{print;print \"${ROLE}\";next}1" > /tmp/aws-auth-patch.yml
 
-##### Trust relantionship
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "arn:aws:iam::<AWS_ACCOUNT_ID>:root"
-            },
-            "Action": "sts:AssumeRole"
-        }
-    ]
-}
-```
-
-##### Policy
-
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": "eks:Describe*",
-            "Resource": "*"
-        }
-    ]
-}
+kubectl patch configmap/aws-auth -n kube-system --patch "$(cat /tmp/aws-auth-patch.yml)"
 ```
