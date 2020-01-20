@@ -1,0 +1,21 @@
+project:
+  namespace: kubeapp
+  appname: hello
+  env_type: ENVIRONMENT_TYPE
+  container_image: CONTAINER_IMAGE
+  container_port: 8080
+
+  prod:
+    replicas: 5
+    maxUnavailable: 1
+    maxSurge: 1
+
+  staging:
+    replicas: 2
+    maxUnavailable: 2
+    maxSurge: 2
+
+  qa:
+    replicas: 2
+    maxUnavailable: 2
+    maxSurge: 2

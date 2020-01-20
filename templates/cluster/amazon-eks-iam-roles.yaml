@@ -1,0 +1,31 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+  
+Resources:
+
+  # https://docs.aws.amazon.com/eks/latest/userguide/service_IAM_role.html
+  EKSClusterIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Description: "EKS Cluster IAM Role"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: "Allow"
+          Principal:
+            Service:
+            - "eks.amazonaws.com"
+          Action:
+          - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
+        - "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+      Path: "/"
+
+Outputs:
+  EKSClusterIAMRole:
+    Description: "EKS Cluster IAM Role ARN"
+    Value:
+      Fn::GetAtt:
+        - "EKSClusterIAMRole"
+        - "Arn"

@@ -1,0 +1,79 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  BucketName:
+    Type: "String"
+  
+  KeyPairName:
+    Type: "AWS::EC2::KeyPair::KeyName"
+
+Resources:
+
+  EKSVPCStack:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      TemplateURL:
+        Fn::Sub: "https://${BucketName}.s3.amazonaws.com/templates/cluster/amazon-eks-vpc-private-subnets.yaml"
+      Parameters:
+        VpcBlock: "10.0.0.0/16"
+        PublicSubnet01Block: "10.0.10.0/24"
+        PublicSubnet02Block: "10.0.20.0/24"
+        PrivateSubnet01Block: "10.0.100.0/24"
+        PrivateSubnet02Block: "10.0.200.0/24"
+
+  IAMStack:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      TemplateURL:
+        Fn::Sub: "https://${BucketName}.s3.amazonaws.com/templates/cluster/amazon-eks-iam-roles.yaml"
+
+  EKSClusterStack:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      TemplateURL:
+        Fn::Sub: "https://${BucketName}.s3.amazonaws.com/templates/cluster/amazon-eks-cluster.yaml"
+      Parameters:
+        SubnetIds:
+          Fn::GetAtt:
+            - "EKSVPCStack"
+            - "Outputs.SubnetIds"
+        SecurityGroups:
+          Fn::GetAtt:
+            - "EKSVPCStack"
+            - "Outputs.SecurityGroups"
+        RoleArn:
+          Fn::GetAtt:
+            - "IAMStack"
+            - "Outputs.EKSClusterIAMRole"
+    
+  EKSNodeGroup:
+    Type: "AWS::CloudFormation::Stack"
+    Properties:
+      TemplateURL:
+        Fn::Sub: "https://${BucketName}.s3.amazonaws.com/templates/cluster/amazon-eks-nodegroup.yaml"
+      Parameters:
+        ClusterName:
+          Fn::GetAtt:
+            - "EKSClusterStack"
+            - "Outputs.ClusterName"
+        KeyName:
+          Ref: "KeyPairName"
+        NodeAutoScalingGroupMinSize: "2"
+        NodeAutoScalingGroupDesiredCapacity: "3"
+        NodeAutoScalingGroupMaxSize: "10"
+        NodeGroupName: "NodeGroup01"
+        NodeInstanceType: "t3.medium"
+        Subnets:
+          Fn::GetAtt:
+            - "EKSVPCStack"
+            - "Outputs.SubnetIds"
+        ClusterControlPlaneSecurityGroup:
+          Fn::GetAtt:
+            - "EKSVPCStack"
+            - "Outputs.SecurityGroups"
+        VpcId:
+          Fn::GetAtt:
+            - "EKSVPCStack"
+            - "Outputs.VpcId"

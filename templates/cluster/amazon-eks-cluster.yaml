@@ -1,0 +1,38 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  SubnetIds:
+    Type: "String"
+  
+  SecurityGroups:
+    Type: "String"
+
+  RoleArn:
+    Type: "String"
+
+Resources:
+
+  EKSCluster:
+    Type: "AWS::EKS::Cluster"
+    Properties:
+      Name: "KubernetesClusterDevel"
+      RoleArn:
+        Ref: "RoleArn"
+      ResourcesVpcConfig:
+        SubnetIds:
+          Fn::Split:
+            - ","
+            - Ref: "SubnetIds"
+        SecurityGroupIds:
+          Fn::Split:
+            - ","
+            - Ref: "SecurityGroups"
+
+Outputs:
+  ClusterName:
+    Description: "EKS Cluster Name"
+    Value:
+      Ref: "EKSCluster"
+

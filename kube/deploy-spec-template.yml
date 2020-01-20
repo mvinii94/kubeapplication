@@ -1,0 +1,58 @@
+{%- set namespace = env.project.namespace + "-" + env.project.env_type -%}
+{%- set appname = env.project.appname + "-" + env.project.env_type -%}
+{%- set replicas = env.project[env.project.env_type].replicas -%}
+{%- set container_image = env.project.container_image -%}
+{%- set container_port = env.project.container_port -%}
+{%- set max_unavailable = env.project[env.project.env_type].maxUnavailable -%}
+{%- set max_surge = env.project[env.project.env_type].maxSurge -%}
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name:  {{ namespace }}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ appname }}
+  namespace: {{ namespace }}
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 8080
+  selector:
+    app: {{ appname }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ appname }}
+  namespace: {{ namespace }}
+spec:
+  replicas: {{ replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ max_unavailable }}
+      maxSurge: {{ max_surge }}
+  selector:
+    matchLabels:
+      app: {{ appname }}
+  template:
+    metadata:
+      labels:
+        app: {{ appname }}
+    spec:
+      containers:
+        - name: {{ appname }}
+          image: {{ container_image }}
+          securityContext:
+            privileged: false
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: {{ container_port}}

@@ -1,0 +1,442 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  ApplicationName:
+    Type: "String"
+    Default: "helloworld"
+
+  KubernetesClusterName:
+    Type: "String"
+
+  BranchName:
+    Description: "GitHub branch name"
+    Type: "String"
+    Default: "master"
+
+  RepositoryName:
+    Description: "GitHub repository name"
+    Type: "String"
+    Default: "kubernetes-cicd"
+
+  GitHubOwner:
+    Type: "String"
+    Default: "mvinii94"
+
+  GitHubOAuthToken:
+    Type: "String"
+    NoEcho: true
+    MinLength: 40
+    MaxLength: 40
+    AllowedPattern: "[a-z0-9]*"
+
+  KubectlRoleName:
+    Type: String
+    Default: EksWorkshopCodeBuildKubectlRole
+    Description: IAM role used by kubectl to interact with EKS cluster
+    MinLength: 3
+    MaxLength: 100
+    ConstraintDescription: You must enter a kubectl IAM role
+  
+  NotificationEmail:
+    Type: String
+    Description: "An email to be notified by the Pipeline for approvals"
+
+Resources:
+
+  ECRRepository:
+    DeletionPolicy: "Retain"
+    UpdateReplacePolicy: "Retain"
+    Type: "AWS::ECR::Repository"
+    Properties:
+      RepositoryName:
+        Fn::Sub: "${ApplicationName}-img-registry-${AWS::Region}"
+
+  CodePipelineArtifactStoreBucket:
+      DeletionPolicy: "Retain"
+      UpdateReplacePolicy: "Retain"
+      Type: "AWS::S3::Bucket"
+
+  CodePipelineArtifactStoreBucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket:
+        Ref: "CodePipelineArtifactStoreBucket"
+      PolicyDocument:
+        Version: 2012-10-17
+        Id: "SSEAndSSLPolicy"
+        Statement:
+        - Action:
+          - "s3:GetObject"
+          - "s3:GetObjectVersion"
+          - "s3:GetBucketVersioning"
+          Condition:
+            Bool:
+              aws:SecureTransport: false
+          Effect: "Allow"
+          Principal:
+            AWS:
+              - Fn::GetAtt:
+                  - "CodePipelineServiceRole"
+                  - "Arn"
+              - Fn::GetAtt:
+                  - "CodeBuildServiceRole"
+                  - "Arn"
+          Resource:
+            - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}"
+            - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}/*"
+          Sid: "WhitelistedGet"
+        - Action:
+          - "s3:PutObject"
+          Effect: "Allow"
+          Principal:
+            AWS:
+              - Fn::GetAtt:
+                  - "CodePipelineServiceRole"
+                  - "Arn"
+              - Fn::GetAtt:
+                  - "CodeBuildServiceRole"
+                  - "Arn"
+          Resource:
+            - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}"
+            - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}/*"
+          Sid: WhitelistedPut
+
+  CodePipelineSNSTopic:
+    Type: "AWS::SNS::Topic"
+    Properties:
+      Subscription:
+        - Endpoint:
+            Ref: "NotificationEmail"
+          Protocol: "email"
+  
+  CodePipelineServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "codepipeline.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName:
+            Fn::Sub: "AWS-CodePipeline-Service-Role-${AWS::StackName}-${AWS::Region}"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - "cloudformation:*"
+                Resource: "*"
+              - Effect: "Allow"
+                Action:
+                  - "sns:Publish"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "codebuild:BatchGetBuilds"
+                  - "codebuild:StartBuild"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "lambda:InvokeFunction"
+                  - "lambda:ListFunctions"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "iam:PassRole"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                  - "s3:GetBucketVersioning"
+                Resource:
+                  - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}/*"
+
+  # "GitHubWebhook" satisfies two requirements:
+  # -- Means that updates are pushed from GitHub, rather than AWS having to poll
+  # -- Means we can filter for required changes
+  GithubWebhook:
+    Type: "AWS::CodePipeline::Webhook"
+    Properties:
+      Authentication: "GITHUB_HMAC"
+      AuthenticationConfiguration:
+        SecretToken:
+          Ref: "GitHubOAuthToken"
+      RegisterWithThirdParty: true
+      Filters:
+      - JsonPath: "$.ref"
+        MatchEquals: "refs/heads/{Branch}"
+      TargetPipeline:
+        Ref: "Pipeline"
+      TargetAction: "Source"
+      TargetPipelineVersion:
+        Fn::GetAtt:
+          - "Pipeline"
+          - "Version"
+
+  Pipeline:
+    Type: "AWS::CodePipeline::Pipeline"
+    Properties:
+      ArtifactStore:
+        Type: "S3"
+        Location:
+          Ref: "CodePipelineArtifactStoreBucket"
+      RoleArn:
+        Fn::GetAtt:
+          - "CodePipelineServiceRole"
+          - "Arn"
+      Stages: 
+        - Name: "Source"
+          Actions:
+            - Name: "Source"
+              ActionTypeId:
+                Category: "Source"
+                Owner: "ThirdParty"
+                Version: "1"
+                Provider: "GitHub"
+              OutputArtifacts:
+                - Name: "SourceOutput"
+              Configuration:
+                Owner:
+                  Ref: "GitHubOwner"
+                Repo:
+                  Ref: "RepositoryName"
+                Branch:
+                  Ref: "BranchName"
+                OAuthToken:
+                  Ref: "GitHubOAuthToken"
+                PollForSourceChanges: false
+              RunOrder: 1
+        - Name: "Staging"
+          Actions:
+            - Name: "Deployment"
+              ActionTypeId:
+                Category: "Build"
+                Owner: "AWS"
+                Version: "1"
+                Provider: "CodeBuild"
+              Configuration:
+                ProjectName:
+                  Ref: "CodeBuildProject"
+                EnvironmentVariables: |
+                  [
+                    {
+                      "name": "ENVIRONMENT_TYPE",
+                      "value": "staging",
+                      "type": "PLAINTEXT"
+                    }
+                  ]
+              InputArtifacts:
+                - Name: "SourceOutput"
+              OutputArtifacts:
+                - Name: "StagingBuildOutput"
+              RunOrder: 1
+            - Name: "Approval"
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: "1"
+              Configuration:
+                NotificationArn:
+                  Ref: "CodePipelineSNSTopic"
+                CustomData: "Do you want to proceed with the release deployment to QA?"
+              RunOrder: '2'
+        - Name: "QA"
+          Actions:
+            - Name: "Deployment"
+              ActionTypeId:
+                Category: "Build"
+                Owner: "AWS"
+                Version: "1"
+                Provider: "CodeBuild"
+              Configuration:
+                ProjectName:
+                  Ref: "CodeBuildProject"
+                EnvironmentVariables: |
+                  [
+                    {
+                      "name": "ENVIRONMENT_TYPE",
+                      "value": "qa",
+                      "type": "PLAINTEXT"
+                    }
+                  ]
+              InputArtifacts:
+                - Name: "SourceOutput"
+              OutputArtifacts:
+                - Name: "QABuildOutput"
+              RunOrder: 1
+            - Name: "Approval"
+              ActionTypeId:
+                Category: Approval
+                Owner: AWS
+                Provider: Manual
+                Version: "1"
+              Configuration:
+                NotificationArn:
+                  Ref: "CodePipelineSNSTopic"
+                CustomData: "Do you want to proceed with the release deployment to Production?"
+              RunOrder: '2'
+        - Name: "Prod"
+          Actions:
+            - Name: "Deployment"
+              ActionTypeId:
+                Category: "Build"
+                Owner: "AWS"
+                Version: "1"
+                Provider: "CodeBuild"
+              Configuration:
+                ProjectName:
+                  Ref: "CodeBuildProject"
+                EnvironmentVariables: |
+                  [
+                    {
+                      "name": "ENVIRONMENT_TYPE",
+                      "value": "prod",
+                      "type": "PLAINTEXT"
+                    }
+                  ]
+              InputArtifacts:
+                - Name: "SourceOutput"
+              OutputArtifacts:
+                - Name: "ProdBuildOutput"
+              RunOrder: 1
+
+  CodeBuildServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "codebuild.amazonaws.com"
+      Path: "/"
+      Policies:
+        - PolicyName:
+            Fn::Sub: "AWS-CodeBuild-Service-Role-${AWS::StackName}-${AWS::Region}"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource:
+                  Fn::Sub: "arn:aws:iam::${AWS::AccountId}:role/${KubectlRoleName}"
+                Effect: "Allow"
+                Action:
+                  - "sts:AssumeRole"
+              - Resource: "*"
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+              - Resource:
+                  - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}"
+                  - Fn::Sub: "${CodePipelineArtifactStoreBucket.Arn}/*"
+                Effect: "Allow"
+                Action:
+                  - "s3:PutObject"
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+              - Resource:
+                  Fn::Sub: "arn:aws:kms:${AWS::Region}:${AWS::AccountId}:/alias/aws/s3"
+                Action:
+                  - "kms:GenerateDataKey*"
+                  - "kms:Encrypt"
+                  - "kms:Decrypt"
+                Effect: "Allow"
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - "ec2:CreateNetworkInterface"
+                  - "ec2:DescribeDhcpOptions"
+                  - "ec2:DescribeNetworkInterfaces"
+                  - "ec2:DeleteNetworkInterface"
+                  - "ec2:DescribeSubnets"
+                  - "ec2:DescribeSecurityGroups"
+                  - "ec2:DescribeVpcs"
+                  - "ec2:CreateNetworkInterfacePermission"
+              - Resource: "*"
+                Effect: "Allow"
+                Action:
+                  - "eks:Describe*"
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - "ecr:GetAuthorizationToken"
+              - Resource:
+                  Fn::Sub: "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ECRRepository}"
+                Effect: "Allow"
+                Action:
+                  - "ecr:GetDownloadUrlForLayer"
+                  - "ecr:BatchGetImage"
+                  - "ecr:BatchCheckLayerAvailability"
+                  - "ecr:PutImage"
+                  - "ecr:InitiateLayerUpload"
+                  - "ecr:UploadLayerPart"
+                  - "ecr:CompleteLayerUpload"
+              
+  CodeBuildProject:
+    Type: "AWS::CodeBuild::Project"
+    Properties:
+      Artifacts:
+        Location:
+          Ref: "CodePipelineArtifactStoreBucket"
+        Type: "S3"
+      Source:
+        Location:
+          Fn::Sub: "${CodePipelineArtifactStoreBucket}/source.zip"
+        Type: "S3"
+      Environment:
+        Type: "LINUX_CONTAINER"
+        ComputeType: "BUILD_GENERAL1_SMALL"
+        Image: "aws/codebuild/docker:17.09.0"
+        EnvironmentVariables:
+          - Name: "ENVIRONMENT_TYPE"
+            Value: "staging"
+          - Name: "REPOSITORY_URI"
+            Value:
+              Fn::Sub: "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}"
+          - Name: "REPOSITORY_NAME"
+            Value:
+              Ref: "RepositoryName"
+          - Name: "REPOSITORY_BRANCH"
+            Value:
+              Ref: "BranchName"
+          - Name: "EKS_CLUSTER_NAME"
+            Value:
+              Ref: "KubernetesClusterName"
+          - Name: "EKS_KUBECTL_ROLE_ARN"
+            Value:
+              Fn::Sub: "arn:aws:iam::${AWS::AccountId}:role/${KubectlRoleName}"
+      ServiceRole:
+        Ref: "CodeBuildServiceRole"
+
+  CloudFormationServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "cloudformation.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName:
+            Fn::Sub: "AWS-CFN-Service-Role-${AWS::StackName}-${AWS::Region}"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: "*"
+                Effect: "Allow"
+                Action: "*"
